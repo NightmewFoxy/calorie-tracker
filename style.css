@@ -172,6 +172,15 @@ main { padding: 4px 16px 0; max-width: 640px; margin: 0 auto; }
 }
 .add-dot svg { width: 16px; height: 16px; stroke: currentColor; stroke-width: 2.8; fill: none; stroke-linecap: round; }
 .add-dot.done { background: var(--good); }
+.sel-dot {
+  flex: none; width: 24px; height: 24px; border-radius: 12px; display: grid; place-items: center;
+  border: 2px solid var(--faint); color: #fff;
+}
+.sel-dot svg { width: 14px; height: 14px; stroke: currentColor; stroke-width: 3; fill: none; stroke-linecap: round; visibility: hidden; }
+.sel-dot.on { background: var(--accent); border-color: var(--accent); }
+.sel-dot.on svg { visibility: visible; }
+.per100 { font-size: 13px; color: var(--muted); text-align: center; margin: -4px 0 12px; }
+.form-note { font-size: 13px; color: var(--muted); margin: 8px 6px 0; }
 .section-label { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 20px 4px 8px; }
 .section-label:first-child { margin-top: 6px; }
 .hint { font-size: 14px; color: var(--muted); text-align: center; padding: 28px 16px; }

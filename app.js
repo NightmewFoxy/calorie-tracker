@@ -98,6 +98,32 @@ function mealTotals(meal) {
   }, { kcal: 0, protein: 0, carbs: 0, fat: 0 });
 }
 
+// weighed foods: nutrition is stored for f.grams (normally 100 g); qty = grams eaten / f.grams
+const per100 = (f, k) => (f.grams ? f[k] / f.grams * 100 : f[k]);
+function lastGrams(f) {
+  if (!f.grams) return 0;
+  let best = null;
+  if (f.id) st().log.forEach((l) => { if (l.foodId === f.id && l.grams > 0 && (!best || l.date > best.date || (l.date === best.date && l.ts > best.ts))) best = l; });
+  return best ? r1(best.grams) : (f.serving || f.grams);
+}
+const usualQty = (f) => (f.grams ? lastGrams(f) / f.grams : 1);
+// "Striploin 200g" -> 200
+const parseGrams = (q) => { const m = String(q || '').match(/(\d+(?:\.\d+)?)\s*(g|gm|grams?)\b/i); return m ? num(m[1]) : 0; };
+const qWords = (q) => String(q || '').toLowerCase().replace(/[(),/]/g, ' ').split(/\s+/).filter((w) => w && !/^\d+(\.\d+)?(g|gm|grams?|kg|ml)?$/.test(w));
+
+// built-in database (fooddb.js), values per 100 g
+function dbSearch(q) {
+  const words = qWords(q).filter((w) => w.length >= 2);
+  if (!words.length || typeof FOOD_DB === 'undefined') return [];
+  return FOOD_DB.map((r, i) => {
+    const hay = (r[0] + ' ' + r[1]).toLowerCase().split(/[^a-z0-9%]+/);
+    let score = 0;
+    words.forEach((w) => { if (hay.some((h) => h.startsWith(w))) score += w.length >= 4 ? 2 : 1; });
+    return { i, score };
+  }).filter((x) => x.score > 0).sort((a, b) => b.score - a.score || a.i - b.i).map((x) => x.i);
+}
+const dbFood = (i) => { const r = FOOD_DB[i]; return { id: '', db: true, name: r[0], kcal: r[2], protein: r[3], carbs: r[4], fat: r[5], grams: 100, serving: r[6] }; };
+
 function logRowFromFood(f, qty, slot, extra) {
   return Object.assign({
     id: uid('l'), date: openDay(), slot, name: f.name, qty,
@@ -282,7 +308,7 @@ function viewToday(top) {
 function itemRow(l) {
   const sub = [l.grams ? `${fmt(l.grams)} g` : '', `C ${fmt(l.carbs)} · F ${fmt(l.fat)}`].filter(Boolean).join(' · ');
   return `<button class="item" data-act="item" data-id="${esc(l.id)}">
-    <div class="name"><div>${esc(l.name)}${l.qty !== 1 ? `<span class="qty">×${r1(l.qty)}</span>` : ''}</div><div class="sub num">${sub}</div></div>
+    <div class="name"><div>${esc(l.name)}${l.qty !== 1 && !l.grams ? `<span class="qty">×${r1(l.qty)}</span>` : ''}</div><div class="sub num">${sub}</div></div>
     <div class="kc num">${fmt(l.kcal)}<small>${fmt(l.protein)} g P</small></div>
   </button>`;
 }
@@ -290,23 +316,46 @@ function itemRow(l) {
 function searchBox(value, ph) {
   return `<label class="search">${ICON.search}<input data-search type="search" placeholder="${esc(ph)}" value="${esc(value)}" autocomplete="off" autocorrect="off" spellcheck="false"></label>`;
 }
-const matches = (name, q) => !q || q.toLowerCase().split(/\s+/).every((w) => name.toLowerCase().includes(w));
+const matches = (name, q) => qWords(q).every((w) => name.toLowerCase().includes(w));
 
 let foodsQuery = '';
+let foodSel = null; // Set of selected food ids while in select mode
 function viewFoods(top) {
   top.title = 'Foods';
   top.eyebrow = `${st().foods.length} saved`;
-  top.actions = `<button class="icon-btn" data-act="food-new" aria-label="New food">${ICON.plus}</button>`;
+  top.actions = foodSel
+    ? '<button class="pill" data-act="sel-cancel">Cancel</button>'
+    : `<button class="pill ghost" data-act="sel-start">Select</button><button class="icon-btn" data-act="food-new" aria-label="New food">${ICON.plus}</button>`;
   const u = usage();
   const list = st().foods.filter((f) => matches(f.name, foodsQuery)).sort((a, b) => (u[b.id] || 0) - (u[a.id] || 0) || a.name.localeCompare(b.name));
-  return searchBox(foodsQuery, 'Search foods') +
-    (list.length ? `<div class="card list">${list.map((f) => `
-      <button class="row" data-act="food-edit" data-id="${esc(f.id)}">
+  let html = searchBox(foodsQuery, 'Search foods');
+  if (foodSel) {
+    html += foodSel.size
+      ? `<button class="btn danger" style="margin-bottom:10px" data-act="sel-delete">Delete ${foodSel.size} food${foodSel.size > 1 ? 's' : ''}</button>`
+      : '<div class="form-note" style="margin:0 6px 10px">Tap the foods you want to remove.</div>';
+  }
+  html += list.length ? `<div class="card list">${list.map((f) => `
+      <button class="row" data-act="${foodSel ? 'sel-toggle' : 'food-edit'}" data-id="${esc(f.id)}">
+        ${foodSel ? `<span class="sel-dot ${foodSel.has(f.id) ? 'on' : ''}">${ICON.check}</span>` : ''}
         <div class="name"><div class="title">${esc(f.name)}</div><div class="sub num">${foodSub(f)}</div></div>
-        <div class="right num">${fmt(f.kcal)}<small>kcal</small></div>
-      </button>`).join('')}</div>` : '<div class="hint">No foods match.</div>');
+        <div class="right num">${fmt(per100(f, 'kcal'))}<small>kcal</small></div>
+      </button>`).join('')}</div>` : '<div class="hint">No saved foods match.</div>';
+  if (!foodSel && foodsQuery) html += dbRows(foodsQuery, 'db-save');
+  return html;
 }
-const foodSub = (f) => [f.grams ? `${fmt(f.grams)} g` : '', `P ${r1(f.protein)} · C ${r1(f.carbs)} · F ${r1(f.fat)}`].filter(Boolean).join(' · ');
+const foodSub = (f) => (f.grams ? 'per 100 g · ' : 'per serving · ') + `P ${r1(per100(f, 'protein'))} · C ${r1(per100(f, 'carbs'))} · F ${r1(per100(f, 'fat'))}`;
+
+function dbRows(q, act) {
+  const hits = dbSearch(q).slice(0, 8);
+  if (!hits.length) return '';
+  return `<div class="section-label">Food database · per 100 g</div><div class="card list">${hits.map((i) => {
+    const f = dbFood(i);
+    return `<button class="row" data-act="${act}" data-i="${i}">
+      <div class="name"><div class="title">${esc(f.name)}</div><div class="sub num">P ${r1(f.protein)} · C ${r1(f.carbs)} · F ${r1(f.fat)}</div></div>
+      <div class="right num">${fmt(f.kcal)}<small>kcal</small></div>
+    </button>`;
+  }).join('')}</div>`;
+}
 
 function viewMeals(top) {
   top.title = 'Meals';
@@ -455,13 +504,17 @@ function sheetAdd() {
     const u = usage();
     const list = st().foods.filter((f) => matches(f.name, a.q)).sort((x, y) => (u[y.id] || 0) - (u[x.id] || 0) || x.name.localeCompare(y.name));
     body += `<div class="card list">
-      <button class="row" data-act="custom"><div class="name"><div class="title" style="color:var(--accent)">${a.q ? `Add “${esc(a.q)}” as a new food` : 'New food or one-off entry'}</div><div class="sub">Type in calories and macros</div></div></button>
-      ${list.slice(0, 120).map((f) => `
+      <button class="row" data-act="custom"><div class="name"><div class="title" style="color:var(--accent)">${a.q ? `Add “${esc(a.q)}” as a new food` : 'New food or one-off entry'}</div><div class="sub">Type in the label's numbers</div></div></button>
+      ${list.slice(0, 120).map((f) => {
+        const q = usualQty(f);
+        return `
       <div class="row" data-act="food-amount" data-id="${esc(f.id)}" role="button">
-        <div class="name"><div class="title">${esc(f.name)}</div><div class="sub num">${foodSub(f)}</div></div>
-        <div class="right num">${fmt(f.kcal)}<small>kcal</small></div>
+        <div class="name"><div class="title">${esc(f.name)}</div><div class="sub num">${f.grams ? `${fmt(f.grams * q)} g · ` : ''}P ${fmt(f.protein * q)} · C ${fmt(f.carbs * q)} · F ${fmt(f.fat * q)}</div></div>
+        <div class="right num">${fmt(f.kcal * q)}<small>kcal</small></div>
         <button class="add-dot ${a.justAdded[f.id] ? 'done' : ''}" data-act="add-food" data-id="${esc(f.id)}" aria-label="Add">${a.justAdded[f.id] ? ICON.check : ICON.plus}</button>
-      </div>`).join('')}</div>`;
+      </div>`;
+      }).join('')}</div>`;
+    if (a.q) body += dbRows(a.q, 'db-amount');
   } else {
     const dates = pastDates().slice(0, 21);
     if (!dates.length) body += '<div class="hint">No past days yet.</div>';
@@ -496,6 +549,12 @@ function summariseItems(list) {
   return counts.map((c) => c.name + (c.n !== 1 ? ' ×' + r1(c.n) : '')).join(', ');
 }
 
+function saveDbFood(f) {
+  const food = { id: uid('f'), name: f.name, kcal: f.kcal, protein: f.protein, carbs: f.carbs, fat: f.fat, grams: 100, uses: 0 };
+  commit({ type: 'food.put', data: food });
+  return food;
+}
+
 function addFoodNow(food, qty, slot) {
   const row = logRowFromFood(food, qty, slot);
   commit({ type: 'log.put', data: row });
@@ -526,14 +585,22 @@ function undoRows(rows, label) {
 
 // ----- one food: pick an amount -----
 
+// weighed foods ask only for grams; per-serving foods (restaurant meals etc.) ask for servings
 function amountFields(state, unitGrams) {
+  if (unitGrams) return `<div class="card form">
+    <div class="field"><label>Weight</label>
+      <div class="stepper"><button data-act="g-step" data-d="-10">−</button><input data-k="grams" type="number" inputmode="decimal" min="0" value="${r1(unitGrams * state.qty)}"><button data-act="g-step" data-d="10">+</button></div>
+      <span class="unit">g</span>
+    </div>
+  </div>`;
   return `<div class="card form">
     <div class="field"><label>Servings</label>
       <div class="stepper"><button data-act="qty-step" data-d="-0.5">−</button><input data-k="qty" type="number" inputmode="decimal" step="0.25" min="0" value="${r1(state.qty)}"><button data-act="qty-step" data-d="0.5">+</button></div>
     </div>
-    ${unitGrams ? `<div class="field"><label>Weight</label><input data-k="grams" type="number" inputmode="decimal" value="${r1(unitGrams * state.qty)}"><span class="unit">g</span></div>` : ''}
   </div>`;
 }
+const per100Line = (f) => (f.grams ? `<div class="per100 num">Per 100 g: ${fmt(per100(f, 'kcal'))} kcal · P ${r1(per100(f, 'protein'))} · C ${r1(per100(f, 'carbs'))} · F ${r1(per100(f, 'fat'))}</div>` : '');
+const focusGrams = (sh) => { const g = sh.querySelector('[data-k="grams"]'); if (g) { g.focus(); g.select(); } };
 
 function previewHtml(v, qty) {
   return `<div class="preview">
@@ -545,17 +612,20 @@ function previewHtml(v, qty) {
 }
 
 const amt = { qty: 1 };
-function openFoodAmount(food) {
-  amt.qty = 1;
+function openFoodAmount(food, grams) {
   amt.food = food;
+  amt.qty = food.grams ? (grams || lastGrams(food)) / food.grams : 1;
+  let first = true;
   openSheet(() => ({
     title: food.name,
-    body: `<div data-preview>${previewHtml(food, amt.qty)}</div>${amountFields(amt, food.grams)}
+    body: `<div data-preview>${previewHtml(food, amt.qty)}</div>${per100Line(food)}${amountFields(amt, food.grams)}
+      ${food.db ? '<div class="form-note">From the built-in food database. It will also be saved to your foods.</div>' : ''}
       <div style="height:16px"></div><button class="btn" data-act="amount-add">Add to ${esc(addState.slot)}</button>`,
-    after: () => {
+    after: (sh) => {
       const upd = () => { $('#sheet [data-preview]').innerHTML = previewHtml(food, amt.qty); };
       upd.unitGrams = food.grams;
       bindAmountInputs(upd);
+      if (first) { first = false; focusGrams(sh); }
     }
   }));
 }
@@ -565,8 +635,8 @@ function bindAmountInputs(onChange) {
   const q = sh.querySelector('[data-k="qty"]');
   const g = sh.querySelector('[data-k="grams"]');
   const unit = onChange.unitGrams;
-  if (q) q.oninput = () => { amt.qty = num(q.value); if (g) g.value = r1(unit * amt.qty); onChange(); };
-  if (g) g.oninput = () => { amt.qty = unit ? num(g.value) / unit : amt.qty; q.value = r1(amt.qty); onChange(); };
+  if (q) q.oninput = () => { amt.qty = num(q.value); onChange(); };
+  if (g) g.oninput = () => { amt.qty = unit ? num(g.value) / unit : amt.qty; onChange(); };
 }
 
 // ----- one logged item: edit / move / delete -----
@@ -596,21 +666,36 @@ function openItem(id) {
 // ----- food create / edit (also used for one-off entries) -----
 
 function openFoodForm(food, mode) {
-  const f = Object.assign({ name: '', kcal: '', protein: '', carbs: '', fat: '', grams: '' }, food || {});
+  const f = Object.assign({ name: '', kcal: '', protein: '', carbs: '', fat: '', grams: 100 }, food || {});
   const custom = mode === 'custom';
-  const fields = [['kcal', 'Calories', 'kcal'], ['protein', 'Protein', 'g'], ['carbs', 'Carbs', 'g'], ['fat', 'Fat', 'g'], ['grams', 'Serving weight', 'g']];
+  const fields = [['grams', 'Values are for', 'g'], ['kcal', 'Calories', 'kcal'], ['protein', 'Protein', 'g'], ['carbs', 'Carbs', 'g'], ['fat', 'Fat', 'g']];
   openSheet(() => ({
     title: custom ? 'New entry' : food && food.id ? 'Edit food' : 'New food',
     body: `<div class="card form">
-        <div class="field"><input class="wide" data-k="name" placeholder="Food name" value="${esc(f.name)}" autocomplete="off"></div>
+        <div class="field"><input class="wide" data-k="name" placeholder="Food name, e.g. striploin" value="${esc(f.name)}" autocomplete="off"></div>
         ${fields.map(([k, l, u]) => `<div class="field"><label>${l}</label><input data-k="${k}" type="number" inputmode="decimal" placeholder="0" value="${f[k] === '' ? '' : r1(num(f[k]))}"><span class="unit">${u}</span></div>`).join('')}
       </div>
+      <div class="form-note">Use the label's numbers for 100 g (or any weight). When you log it, you just type how many grams you ate. Leave “Values are for” at 0 for a whole dish you count per serving.</div>
+      <div data-lookup>${lookupHtml(f.name)}</div>
       ${custom ? `<div style="height:12px"></div><div class="card form"><div class="field"><label>Save to my foods</label><span class="toggle"><input type="checkbox" data-k="keep" checked><span></span></span></div></div>` : ''}
       <div style="height:16px"></div>
-      <button class="btn" data-act="food-save" data-id="${esc(f.id || '')}" data-mode="${mode || ''}">${custom ? `Add to ${esc(addState.slot)}` : 'Save'}</button>
+      <button class="btn" data-act="food-save" data-id="${esc(f.id || '')}" data-mode="${mode || ''}">${custom ? 'Next: weight' : 'Save'}</button>
       ${food && food.id ? `<button class="btn danger" data-act="food-del" data-id="${esc(food.id)}">Delete food</button>` : ''}`,
     after: (sh) => { if (!f.name) setTimeout(() => sh.querySelector('[data-k="name"]').focus(), 350); }
   }));
+}
+
+// database suggestions under the name field
+function lookupHtml(name) {
+  const hits = dbSearch(name).slice(0, 4);
+  if (!hits.length) return '';
+  return `<div class="section-label">Fill in from the food database</div><div class="card list">${hits.map((i) => {
+    const f = dbFood(i);
+    return `<button class="row" data-act="db-fill" data-i="${i}">
+      <div class="name"><div class="title">${esc(f.name)}</div><div class="sub num">per 100 g · P ${r1(f.protein)} · C ${r1(f.carbs)} · F ${r1(f.fat)}</div></div>
+      <div class="right num">${fmt(f.kcal)}<small>kcal</small></div>
+    </button>`;
+  }).join('')}</div>`;
 }
 
 function readFoodForm() {
@@ -638,9 +723,12 @@ function sheetMeal() {
   const rows = d.items.map((i, idx) => {
     const f = foodById(i.foodId);
     if (!f) return '';
+    const u = f.grams || 0; // weighed foods are edited in grams
+    const step = u ? 10 / u : 1;
     return `<div class="row">
       <div class="name"><div class="title">${esc(f.name)}</div><div class="sub num">${fmt(f.kcal * i.qty)} kcal · ${fmt(f.protein * i.qty)} g P</div></div>
-      <div class="stepper"><button data-act="mi-step" data-i="${idx}" data-d="-1">−</button><input data-k="mi-${idx}" data-act-input="mi-qty" data-i="${idx}" type="number" inputmode="decimal" value="${r1(i.qty)}"><button data-act="mi-step" data-i="${idx}" data-d="1">+</button></div>
+      <div class="stepper"><button data-act="mi-step" data-i="${idx}" data-d="${-step}">−</button><input data-k="mi-${idx}" data-act-input="mi-qty" data-i="${idx}" data-unit="${u}" type="number" inputmode="decimal" value="${r1(u ? i.qty * u : i.qty)}"><button data-act="mi-step" data-i="${idx}" data-d="${step}">+</button></div>
+      ${u ? '<span class="unit" style="color:var(--muted);font-size:14px">g</span>' : ''}
     </div>`;
   }).join('');
   return {
@@ -783,7 +871,7 @@ function toast(msg, undo) {
 
 document.addEventListener('click', (e) => {
   const tabBtn = e.target.closest('#tabs button');
-  if (tabBtn) { tab = tabBtn.dataset.tab; window.scrollTo(0, 0); render(); return; }
+  if (tabBtn) { tab = tabBtn.dataset.tab; foodSel = null; window.scrollTo(0, 0); render(); return; }
   if (e.target.id === 'scrim') { closeSheets(); return; }
   const el = e.target.closest('[data-act]');
   if (!el) return;
@@ -799,7 +887,7 @@ document.addEventListener('click', (e) => {
     case 'add-mode': addState.mode = el.dataset.mode; addState.q = ''; redrawSheet(false); break;
     case 'add-food': {
       const f = foodById(id);
-      const rows = addFoodNow(f, 1, addState.slot);
+      const rows = addFoodNow(f, usualQty(f), addState.slot);
       addState.justAdded[id] = 1;
       redrawSheet();
       undoRows(rows, `Added ${f.name}`);
@@ -840,15 +928,57 @@ document.addEventListener('click', (e) => {
       q.dispatchEvent(new Event('input'));
       break;
     }
+    case 'g-step': {
+      const g = $('#sheet [data-k="grams"]');
+      g.value = Math.max(0, r1(num(g.value) + num(el.dataset.d)));
+      g.dispatchEvent(new Event('input'));
+      break;
+    }
     case 'amount-add': {
       if (amt.qty <= 0) break;
-      const rows = addFoodNow(amt.food, amt.qty, addState.slot);
-      addState.justAdded[amt.food.id] = 1;
+      let food = amt.food;
+      if (food.db) {
+        // a database food becomes one of your foods the first time you log it
+        food = st().foods.find((x) => x.name.toLowerCase() === food.name.toLowerCase()) || saveDbFood(food);
+      }
+      const rows = addFoodNow(food, amt.qty, addState.slot);
+      if (food.id) addState.justAdded[food.id] = 1;
       popSheet();
-      undoRows(rows, `Added ${amt.food.name}`);
+      undoRows(rows, `Added ${food.name}`);
       break;
     }
     case 'custom': openFoodForm({ name: addState.q }, 'custom'); break;
+    case 'db-amount': openFoodAmount(dbFood(Number(el.dataset.i)), parseGrams(addState.q)); break;
+    case 'db-save': { const f = dbFood(Number(el.dataset.i)); openFoodForm({ name: f.name, kcal: f.kcal, protein: f.protein, carbs: f.carbs, fat: f.fat, grams: 100 }, 'new'); break; }
+    case 'db-fill': {
+      const f = dbFood(Number(el.dataset.i));
+      const sh = $('#sheet');
+      const put = (k, v) => { sh.querySelector(`[data-k="${k}"]`).value = v; };
+      if (!sh.querySelector('[data-k="name"]').value.trim()) put('name', f.name);
+      put('grams', 100); put('kcal', f.kcal); put('protein', f.protein); put('carbs', f.carbs); put('fat', f.fat);
+      sh.querySelector('[data-lookup]').innerHTML = '';
+      toast('Filled in per 100 g');
+      break;
+    }
+
+    case 'sel-start': foodSel = new Set(); render(); break;
+    case 'sel-cancel': foodSel = null; render(); break;
+    case 'sel-toggle': if (foodSel.has(id)) foodSel.delete(id); else foodSel.add(id); render(); break;
+    case 'sel-delete': {
+      const ids = foodSel;
+      const gone = st().foods.filter((f) => ids.has(f.id));
+      const touched = st().meals.filter((m) => m.items.some((i) => ids.has(i.foodId))).map((m) => Object.assign({}, m, { items: m.items.slice() }));
+      const ops = gone.map((f) => ({ type: 'food.del', data: { id: f.id } }));
+      touched.forEach((m) => {
+        const items = m.items.filter((i) => !ids.has(i.foodId));
+        ops.push(items.length ? { type: 'meal.put', data: Object.assign({}, m, { items }) } : { type: 'meal.del', data: { id: m.id } });
+      });
+      foodSel = null;
+      commit(ops);
+      toast(`Deleted ${gone.length} food${gone.length > 1 ? 's' : ''}${touched.length ? ` (also taken out of ${touched.length} meal${touched.length > 1 ? 's' : ''})` : ''}`,
+        () => commit(gone.map((f) => ({ type: 'food.put', data: f })).concat(touched.map((m) => ({ type: 'meal.put', data: m })))));
+      break;
+    }
 
     case 'item': openItem(id); break;
     case 'item-slot': amt.slot = slot; el.parentElement.querySelectorAll('.chip').forEach((c) => c.classList.toggle('on', c === el)); break;
@@ -904,12 +1034,14 @@ document.addEventListener('click', (e) => {
       const v = readFoodForm();
       if (!v.name) { toast('Give it a name first'); break; }
       const mode = el.dataset.mode;
-      const food = { id: id || uid('f'), name: v.name, kcal: v.kcal, protein: v.protein, carbs: v.carbs, fat: v.fat, grams: v.grams, uses: 0 };
+      // "Striploin 200g" is saved as "Striploin": the weight is asked for when logging
+      const name = mode === 'custom' && v.grams ? v.name.replace(/\s*\d+(\.\d+)?\s*(g|gm|grams?)\b/i, '').trim() || v.name : v.name;
+      const food = { id: id || uid('f'), name, kcal: v.kcal, protein: v.protein, carbs: v.carbs, fat: v.fat, grams: v.grams, uses: 0 };
       if (mode === 'custom') {
         if (v.keep) commit({ type: 'food.put', data: food });
-        const rows = addFoodNow(v.keep ? food : Object.assign({}, food, { id: '' }), 1, addState.slot);
         popSheet();
-        undoRows(rows, `Added ${food.name}`);
+        // next step: how much you ate
+        openFoodAmount(v.keep ? food : Object.assign({}, food, { id: '' }), parseGrams(v.name) || food.grams);
       } else {
         commit({ type: 'food.put', data: food });
         popSheet();
@@ -931,14 +1063,15 @@ document.addEventListener('click', (e) => {
     case 'meal-pick': pickQuery = ''; openSheet(sheetPick, { tall: true }); break;
     case 'pick': {
       const ex = draft.items.find((i) => i.foodId === id);
-      if (ex) ex.qty += 1; else draft.items.push({ foodId: id, qty: 1 });
+      const q = usualQty(foodById(id));
+      if (ex) ex.qty += q; else draft.items.push({ foodId: id, qty: q });
       popSheet();
       break;
     }
     case 'mi-step': {
       const i = Number(el.dataset.i);
-      draft.items[i].qty = r1(draft.items[i].qty + num(el.dataset.d));
-      if (draft.items[i].qty <= 0) draft.items.splice(i, 1);
+      draft.items[i].qty = Math.round((draft.items[i].qty + num(el.dataset.d)) * 1e4) / 1e4;
+      if (draft.items[i].qty <= 1e-6) draft.items.splice(i, 1);
       redrawSheet();
       break;
     }
@@ -1004,8 +1137,11 @@ document.addEventListener('input', (e) => {
   if (t.dataset.k === 'meal-name') draft.name = t.value;
   if (t.dataset.actInput === 'mi-qty') {
     const i = Number(t.dataset.i);
-    draft.items[i].qty = num(t.value);
+    const u = num(t.dataset.unit);
+    draft.items[i].qty = u ? num(t.value) / u : num(t.value);
   }
+  // food form: database suggestions follow the name
+  if (t.closest('#sheet') && t.dataset.k === 'name' && $('#sheet [data-lookup]')) $('#sheet [data-lookup]').innerHTML = lookupHtml(t.value);
 });
 
 document.addEventListener('change', (e) => {

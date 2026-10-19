@@ -1,7 +1,7 @@
 // Offline shell: always try the network first so app updates show up on the next open;
 // fall back to the cached copy when offline or the network is slow.
-const CACHE = 'calories-v2';
-const SHELL = ['./', 'index.html', 'app.js', 'style.css', 'manifest.webmanifest', 'icon-180.png', 'icon-512.png'];
+const CACHE = 'calories-v3';
+const SHELL = ['./', 'index.html', 'app.js', 'style.css', 'fooddb.js', 'manifest.webmanifest', 'icon-180.png', 'icon-512.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
