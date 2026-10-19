@@ -1,6 +1,6 @@
 // Offline shell: always try the network first so app updates show up on the next open;
 // fall back to the cached copy when offline or the network is slow.
-const CACHE = 'calories-v5';
+const CACHE = 'calories-v6';
 const SHELL = ['./', 'index.html', 'app.js', 'style.css', 'fooddb.js', 'manifest.webmanifest', 'icon-180.png', 'icon-512.png'];
 
 self.addEventListener('install', (e) => {

@@ -555,22 +555,37 @@ function autoMealOps() {
   slots().concat([...new Set(rows.map((l) => l.slot))]).filter((x, i, a) => a.indexOf(x) === i).forEach((slot) => {
     const ownId = `auto-${day}-${slot}`;
     const own = st().meals.find((m) => m.id === ownId);
+    // weighed foods count by grams; n = how many separate entries (2 eggs logged one by one)
     const items = [];
     rows.filter((l) => l.slot === slot && l.foodId && foodById(l.foodId)).forEach((l) => {
+      const f = foodById(l.foodId);
+      const q = f.grams && l.grams ? l.grams / f.grams : l.qty;
       const ex = items.find((i) => i.foodId === l.foodId);
-      if (ex) ex.qty = r1(ex.qty + l.qty); else items.push({ foodId: l.foodId, qty: l.qty });
+      const r3 = (x) => Math.round(x * 1000) / 1000; // qty is grams / 100, so keep it to the gram
+      if (ex) { ex.qty = r3(ex.qty + q); ex.n += 1; } else items.push({ foodId: l.foodId, qty: r3(q), n: 1 });
     });
     const twin = items.length >= 2 && st().meals.find((m) => m.id !== ownId && m.slot === slot && foodKey(m.items) === foodKey(items));
     const target = items.length < 2 ? null : twin || own;
     if (own && own !== target) ops.push({ type: 'meal.del', data: { id: own.id } });
     if (items.length < 2) return;
-    const autoName = (list) => list.map((i) => (foodById(i.foodId) || {}).name).join(', ');
-    // a renamed meal keeps its name; one still on its automatic name follows the foods
-    const name = target && target.name && (target === twin || target.name !== autoName(target.items)) ? target.name : autoName(items);
-    const meal = { id: target ? target.id : ownId, name, slot, items };
+    // a renamed meal keeps its name; one still on an automatic name follows what was eaten
+    const renamed = target && target.name && target.name !== mealAutoName(target.items) && target.name !== target.items.map((i) => (foodById(i.foodId) || {}).name).join(', ');
+    const meal = { id: target ? target.id : ownId, name: renamed ? target.name : mealAutoName(items), slot, items };
     if (!target || !same(target.items, items) || target.name !== meal.name) ops.push({ type: 'meal.put', data: meal });
   });
   return ops;
+}
+
+// "2 Eggs + 100g Brown rice (uncooked) + 200g Beef striploin, …"
+function mealAutoName(items) {
+  return items.map((i) => {
+    const f = foodById(i.foodId);
+    if (!f) return '';
+    const n = i.n || 1;
+    if (n > 1 && !/[,(]/.test(f.name)) return `${n} ${/s$/i.test(f.name) ? f.name : f.name + 's'}`;
+    if (f.grams) return `${fmt(f.grams * i.qty)}g ${f.name}`;
+    return i.qty !== 1 ? `${r1(i.qty)} × ${f.name}` : f.name;
+  }).filter(Boolean).join(' + ');
 }
 
 function summariseItems(list) {
@@ -599,7 +614,9 @@ function addMealNow(meal, slot) {
   let ts = Date.now();
   meal.items.forEach((i) => {
     const f = foodById(i.foodId);
-    if (f) rows.push(logRowFromFood(f, i.qty, slot, { mealId: meal.id, ts: ts++ }));
+    // a meal saved as "2 Eggs" logs two eggs again, not one double egg
+    const n = i.n > 1 ? i.n : 1;
+    if (f) for (let k = 0; k < n; k++) rows.push(logRowFromFood(f, i.qty / n, slot, { mealId: meal.id, ts: ts++ }));
   });
   commit(rows.map((r) => ({ type: 'log.put', data: r })));
   return rows;
