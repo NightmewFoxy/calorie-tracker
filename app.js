@@ -362,7 +362,7 @@ function viewMeals(top) {
   top.eyebrow = 'Foods you eat together';
   top.actions = `<button class="icon-btn" data-act="meal-new" aria-label="New meal">${ICON.plus}</button>`;
   const meals = st().meals;
-  if (!meals.length) return '<div class="hint">No meals yet. Tap + to make one, or use ⋯ on a meal in Today to save it.</div>';
+  if (!meals.length) return '<div class="hint">No meals yet. When you end a day, each meal time with 2 or more foods (your breakfast, lunch…) is saved here by itself, ready to add again with one tap. You can also tap + to make one.</div>';
   let html = '';
   slots().concat(['']).forEach((slot) => {
     const list = meals.filter((m) => (slot ? m.slot === slot : !slots().includes(m.slot)));
@@ -499,7 +499,7 @@ function sheetAdd() {
   if (a.mode === 'meals') {
     const list = st().meals.filter((m) => matches(m.name, a.q)).sort((x, y) => (y.slot === a.slot) - (x.slot === a.slot));
     body += list.length ? `<div class="card list">${list.map((m) => mealRow(m, true, a.justAdded[m.id])).join('')}</div>`
-      : '<div class="hint">No saved meals here yet. Add foods to a meal in Today, then tap ⋯ › Save as a meal.</div>';
+      : '<div class="hint">No saved meals yet. They save themselves when you end a day, or tap ⋯ on a meal in Today › Save as a meal.</div>';
   } else if (a.mode === 'foods') {
     const u = usage();
     const list = st().foods.filter((f) => matches(f.name, a.q)).sort((x, y) => (u[y.id] || 0) - (u[x.id] || 0) || x.name.localeCompare(y.name));
@@ -538,6 +538,28 @@ function sheetAdd() {
   }
   const today = totals(dayItems(openDay()));
   return { title: 'Add to ' + a.slot, body, action: `<button class="pill solid" data-act="sheet-close"><span class="num">${fmt(today.kcal)} kcal</span> · Done</button>` };
+}
+
+// when a day ends, every meal time with 2+ saved foods becomes a one-tap meal.
+// Same slot + same foods as an existing meal: that meal just takes today's amounts.
+function autoMealOps(day) {
+  const ops = [];
+  const saved = [];
+  const rows = dayItems(day);
+  [...new Set(rows.map((l) => l.slot))].forEach((slot) => {
+    const items = [];
+    rows.filter((l) => l.slot === slot && l.foodId && foodById(l.foodId)).forEach((l) => {
+      const ex = items.find((i) => i.foodId === l.foodId);
+      if (ex) ex.qty = r1(ex.qty + l.qty); else items.push({ foodId: l.foodId, qty: l.qty });
+    });
+    if (items.length < 2) return;
+    const key = items.map((i) => i.foodId).sort().join(',');
+    const same = st().meals.find((m) => m.slot === slot && m.items.map((i) => i.foodId).sort().join(',') === key);
+    const name = items.map((i) => foodById(i.foodId).name).join(', ');
+    ops.push({ type: 'meal.put', data: { id: same ? same.id : uid('m'), name: same ? same.name : name, slot, items } });
+    saved.push(slot);
+  });
+  return { ops, saved };
 }
 
 function summariseItems(list) {
@@ -1107,9 +1129,11 @@ document.addEventListener('click', (e) => {
       const day = openDay();
       const t = totals(dayItems(day));
       const next = nextDay();
-      commit({ type: 'day.close', data: { next, summary: { date: day, kcal: r1(t.kcal), protein: r1(t.protein), carbs: r1(t.carbs), fat: r1(t.fat), closedAt: new Date().toISOString(), note: '' } } });
+      const auto = autoMealOps(day);
+      commit(auto.ops.concat({ type: 'day.close', data: { next, summary: { date: day, kcal: r1(t.kcal), protein: r1(t.protein), carbs: r1(t.carbs), fat: r1(t.fat), closedAt: new Date().toISOString(), note: '' } } }));
       sheetStack.length = 0;
       endDaySummary(day, t, next);
+      if (auto.saved.length) toast(`Saved as meals: ${auto.saved.join(', ')}`);
       break;
     }
     case 'settings': openSettings(); break;
