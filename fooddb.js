@@ -5,6 +5,7 @@ const FOOD_DB = [
   // striploin: USDA FoodData Central, top loin steak (energy = 4P + 9F; no carbs)
   ['Beef striploin, raw, fat strip left on', 'steak sirloin strip ny new york porterhouse top loin', 228, 20.6, 0, 15.5, 200],
   ['Beef striploin, Australian grass-fed, raw', 'steak sirloin strip top loin aussie', 199, 19.9, 0, 13.2, 200],
+  ['Beef striploin, Australian grass-fed, raw, fat cut off', 'steak sirloin strip top loin aussie lean trimmed', 131, 21.8, 0, 4.9, 200],
   ['Beef striploin, raw, fat strip cut off', 'steak sirloin strip top loin trimmed', 171, 22.2, 0, 9.2, 200],
   ['Beef striploin, raw, lean only (all visible fat removed)', 'steak sirloin strip top loin', 149, 22.9, 0, 6.3, 200],
   ['Beef striploin, cooked weight, grilled no oil', 'steak sirloin strip top loin', 263, 26.2, 0, 17.7, 150],
