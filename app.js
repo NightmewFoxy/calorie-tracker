@@ -153,6 +153,7 @@ function applyLocal(op) {
 function commit(ops) {
   ops = Array.isArray(ops) ? ops : [ops];
   ops.forEach((o) => { o.opId = uid('o'); applyLocal(o); S.queue.push(o); });
+  if (ops.some((o) => /^(log|food)\./.test(o.type))) autoMealOps().forEach((o) => { o.opId = uid('o'); applyLocal(o); S.queue.push(o); });
   save();
   render();
   scheduleFlush();
@@ -196,6 +197,8 @@ async function pull() {
   try {
     const j = await post({ ops: [], read: true });
     S.state = normalize(j.state);
+    const auto = autoMealOps();
+    if (auto.length) commit(auto);
     S.lastSync = Date.now();
     S.syncErr = '';
     save();
@@ -362,7 +365,7 @@ function viewMeals(top) {
   top.eyebrow = 'Foods you eat together';
   top.actions = `<button class="icon-btn" data-act="meal-new" aria-label="New meal">${ICON.plus}</button>`;
   const meals = st().meals;
-  if (!meals.length) return '<div class="hint">No meals yet. When you end a day, each meal time with 2 or more foods (your breakfast, lunch…) is saved here by itself, ready to add again with one tap. You can also tap + to make one.</div>';
+  if (!meals.length) return '<div class="hint">No meals yet. As soon as a meal time has 2 or more foods (your breakfast, lunch…), it is saved here by itself and kept up to date as you log, ready to add again with one tap. You can also tap + to make one.</div>';
   let html = '';
   slots().concat(['']).forEach((slot) => {
     const list = meals.filter((m) => (slot ? m.slot === slot : !slots().includes(m.slot)));
@@ -499,7 +502,7 @@ function sheetAdd() {
   if (a.mode === 'meals') {
     const list = st().meals.filter((m) => matches(m.name, a.q)).sort((x, y) => (y.slot === a.slot) - (x.slot === a.slot));
     body += list.length ? `<div class="card list">${list.map((m) => mealRow(m, true, a.justAdded[m.id])).join('')}</div>`
-      : '<div class="hint">No saved meals yet. They save themselves when you end a day, or tap ⋯ on a meal in Today › Save as a meal.</div>';
+      : '<div class="hint">No saved meals yet. They save themselves once a meal time has 2 or more foods, or tap ⋯ on a meal in Today › Save as a meal.</div>';
   } else if (a.mode === 'foods') {
     const u = usage();
     const list = st().foods.filter((f) => matches(f.name, a.q)).sort((x, y) => (u[y.id] || 0) - (u[x.id] || 0) || x.name.localeCompare(y.name));
@@ -540,26 +543,34 @@ function sheetAdd() {
   return { title: 'Add to ' + a.slot, body, action: `<button class="pill solid" data-act="sheet-close"><span class="num">${fmt(today.kcal)} kcal</span> · Done</button>` };
 }
 
-// when a day ends, every meal time with 2+ saved foods becomes a one-tap meal.
-// Same slot + same foods as an existing meal: that meal just takes today's amounts.
-function autoMealOps(day) {
+// every meal time in the open day with 2+ saved foods is kept as a one-tap meal, updated as you log.
+// It lives under its own id (auto-<date>-<slot>); if an older meal has the same slot and foods,
+// that one takes today's amounts instead, so repeats don't pile up. Returns only the ops that change something.
+function autoMealOps() {
+  const day = openDay();
   const ops = [];
-  const saved = [];
   const rows = dayItems(day);
-  [...new Set(rows.map((l) => l.slot))].forEach((slot) => {
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const foodKey = (items) => items.map((i) => i.foodId).sort().join(',');
+  slots().concat([...new Set(rows.map((l) => l.slot))]).filter((x, i, a) => a.indexOf(x) === i).forEach((slot) => {
+    const ownId = `auto-${day}-${slot}`;
+    const own = st().meals.find((m) => m.id === ownId);
     const items = [];
     rows.filter((l) => l.slot === slot && l.foodId && foodById(l.foodId)).forEach((l) => {
       const ex = items.find((i) => i.foodId === l.foodId);
       if (ex) ex.qty = r1(ex.qty + l.qty); else items.push({ foodId: l.foodId, qty: l.qty });
     });
+    const twin = items.length >= 2 && st().meals.find((m) => m.id !== ownId && m.slot === slot && foodKey(m.items) === foodKey(items));
+    const target = items.length < 2 ? null : twin || own;
+    if (own && own !== target) ops.push({ type: 'meal.del', data: { id: own.id } });
     if (items.length < 2) return;
-    const key = items.map((i) => i.foodId).sort().join(',');
-    const same = st().meals.find((m) => m.slot === slot && m.items.map((i) => i.foodId).sort().join(',') === key);
-    const name = items.map((i) => foodById(i.foodId).name).join(', ');
-    ops.push({ type: 'meal.put', data: { id: same ? same.id : uid('m'), name: same ? same.name : name, slot, items } });
-    saved.push(slot);
+    const autoName = (list) => list.map((i) => (foodById(i.foodId) || {}).name).join(', ');
+    // a renamed meal keeps its name; one still on its automatic name follows the foods
+    const name = target && target.name && (target === twin || target.name !== autoName(target.items)) ? target.name : autoName(items);
+    const meal = { id: target ? target.id : ownId, name, slot, items };
+    if (!target || !same(target.items, items) || target.name !== meal.name) ops.push({ type: 'meal.put', data: meal });
   });
-  return { ops, saved };
+  return ops;
 }
 
 function summariseItems(list) {
@@ -1129,11 +1140,9 @@ document.addEventListener('click', (e) => {
       const day = openDay();
       const t = totals(dayItems(day));
       const next = nextDay();
-      const auto = autoMealOps(day);
-      commit(auto.ops.concat({ type: 'day.close', data: { next, summary: { date: day, kcal: r1(t.kcal), protein: r1(t.protein), carbs: r1(t.carbs), fat: r1(t.fat), closedAt: new Date().toISOString(), note: '' } } }));
+      commit({ type: 'day.close', data: { next, summary: { date: day, kcal: r1(t.kcal), protein: r1(t.protein), carbs: r1(t.carbs), fat: r1(t.fat), closedAt: new Date().toISOString(), note: '' } } });
       sheetStack.length = 0;
       endDaySummary(day, t, next);
-      if (auto.saved.length) toast(`Saved as meals: ${auto.saved.join(', ')}`);
       break;
     }
     case 'settings': openSettings(); break;
