@@ -2,9 +2,12 @@
 // [name, extra search words, kcal, protein, carbs, fat, typical serving g]
 const FOOD_DB = [
   // beef
-  ['Beef striploin (sirloin strip), raw', 'steak ny strip new york porterhouse', 190, 21, 0, 11.6, 200],
-  ['Beef striploin, fat trimmed, raw', 'steak sirloin strip lean', 135, 22.5, 0, 4.8, 200],
-  ['Beef striploin, grilled/pan-fried no oil', 'steak sirloin strip cooked', 250, 27.5, 0, 15, 150],
+  // striploin: USDA FoodData Central, top loin steak (energy = 4P + 9F; no carbs)
+  ['Beef striploin, raw, fat strip left on', 'steak sirloin strip ny new york porterhouse top loin', 228, 20.6, 0, 15.5, 200],
+  ['Beef striploin, Australian grass-fed, raw', 'steak sirloin strip top loin aussie', 199, 19.9, 0, 13.2, 200],
+  ['Beef striploin, raw, fat strip cut off', 'steak sirloin strip top loin trimmed', 171, 22.2, 0, 9.2, 200],
+  ['Beef striploin, raw, lean only (all visible fat removed)', 'steak sirloin strip top loin', 149, 22.9, 0, 6.3, 200],
+  ['Beef striploin, cooked weight, grilled no oil', 'steak sirloin strip top loin', 263, 26.2, 0, 17.7, 150],
   ['Beef ribeye, raw', 'steak rib eye scotch fillet', 250, 19, 0, 19, 250],
   ['Beef tenderloin (fillet), raw', 'steak filet mignon', 160, 21, 0, 8, 200],
   ['Beef top sirloin / rump, raw', 'steak lean', 150, 22, 0, 6.5, 200],
