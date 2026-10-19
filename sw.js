@@ -1,5 +1,6 @@
-// Offline shell: serve the app from cache, refresh it in the background.
-const CACHE = 'calories-v1';
+// Offline shell: always try the network first so app updates show up on the next open;
+// fall back to the cached copy when offline or the network is slow.
+const CACHE = 'calories-v2';
 const SHELL = ['./', 'index.html', 'app.js', 'style.css', 'manifest.webmanifest', 'icon-180.png', 'icon-512.png'];
 
 self.addEventListener('install', (e) => {
@@ -14,8 +15,14 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin) return; // sheet sync always goes to the network
   e.respondWith(caches.open(CACHE).then(async (c) => {
-    const hit = await c.match(e.request, { ignoreSearch: true });
-    const fresh = fetch(e.request).then((res) => { if (res.ok) c.put(e.request, res.clone()); return res; }).catch(() => hit);
-    return hit || fresh;
+    const fresh = fetch(e.request, { cache: 'no-cache' }).then((res) => { if (res.ok) c.put(e.request, res.clone()); return res; });
+    const slow = new Promise((r) => setTimeout(r, 4000)).then(() => c.match(e.request, { ignoreSearch: true }));
+    try {
+      const res = await Promise.race([fresh, slow]);
+      if (res) return res;
+      return await fresh;
+    } catch (err) {
+      return (await c.match(e.request, { ignoreSearch: true })) || Response.error();
+    }
   }));
 });

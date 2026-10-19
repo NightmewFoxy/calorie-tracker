@@ -70,7 +70,7 @@ let tab = 'today';
     const cfg = JSON.parse(atob(decodeURIComponent(m[1]).replace(/-/g, '+').replace(/_/g, '/')));
     if (cfg.u && cfg.k) { S.cfg = cfg; save(); }
   } catch (e) { /* bad link, ignore */ }
-  history.replaceState(null, '', location.pathname);
+  // keep the hash: iOS "Add to Home Screen" saves this URL, and the home-screen app has its own storage
 })();
 
 // ---------- data access ----------
@@ -1020,4 +1020,4 @@ document.addEventListener('change', (e) => {
 
 render();
 pull();
-if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then((reg) => document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => {}); })).catch(() => {});
